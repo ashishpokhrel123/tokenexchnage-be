@@ -1,0 +1,7 @@
+.env
+node_modules
+package-lock.json
+# Ignore Hardhat artifacts, cache, and typechain folders
+src/hardhat/artifacts/
+src/hardhat/cache/
+src/hardhat/typechain-types/
