@@ -1,12 +1,15 @@
 const { ethers } = require("ethers");
 const config = require("../config/config");
-const { getContractAbi } = require("../helpers/contractHelper");
+const { getContractAbi, getUSDCContractAbi } = require("../helpers/contractHelper");
 
 const tokenAbi = getContractAbi();
+const usdcAbi = getUSDCContractAbi();
 console.log(config.rpcUrl);
 const provider = new ethers.JsonRpcProvider(config.rpcUrl);
 const wallet = new ethers.Wallet(config.ownerPrivateKey, provider);
+const otherWallet = new ethers.Wallet(config.ANOTHER_PRIVATE_KEY, provider);
 const contract = new ethers.Contract(config.contractAddress, tokenAbi, wallet);
+const usdcContract = new ethers.Contract(config.MOCKHSDC_CONTRACT_ADDRESS, usdcAbi, wallet );
 
 /**
  * Fetches supported tokens and their exchange rates
@@ -14,50 +17,55 @@ const contract = new ethers.Contract(config.contractAddress, tokenAbi, wallet);
  */
 async function fetchSupportedTokens() {
   try {
-    const [supportedTokens, tokenRates, tokenAddresses] = 
-      await contract.getSupportedTokensAndRates();
-
-    // Convert BigInt values to strings
-    const processedRates = tokenRates.map(rate => rate.toString());
+    const supportedTokens = await contract.getSupportedTokens();
     
-    console.log(supportedTokens, tokenRates, "hello");
-    return { 
-      supportedTokens, 
-      tokenRates: processedRates, 
-      tokenAddresses 
+    // Fetch additional token data in parallel
+    const tokenDetails = await Promise.all(
+      supportedTokens.map(symbol => contract.getTokenInfo(symbol))
+    );
+
+    return {
+      supportedTokens,
+      tokenDetails: tokenDetails.map(detail => ({
+        rate: detail.rate.toString(),
+        address: detail.tokenAddress,
+        decimals: detail.decimals
+      }))
     };
+   
   } catch (error) {
     console.log("Error fetching supported tokens:", error);
     throw error;
   }
 }
 
+
+
 /**
  * Performs a token exchange
- * @param {string} user User address initiating the exchange
- * @param {string} tokenSymbol Token symbol to exchange
- * @param {bigint} amount Amount to exchange
- * @param {boolean} isBuying True if buying, false if selling
+ * @param {string} user - User address initiating the exchange
+ * @param {string} tokenSymbol - Token symbol to exchange
+ * @param {string | number} amount - Amount to exchange (as a string or number)
+ * @param {boolean} isBuying - True if buying, false if selling
  * @returns {Promise<void>}
  */
-async function exchange(user, tokenSymbol, amount, isBuying) {
+async function exchange(account, tokenSymbol, amount, isBuying) {
   try {
-    const tx = await contract.exchange(tokenSymbol, amount, isBuying);
+   
+    const amountBigInt = ethers.parseUnits(amount.toString(), 18); 
+
+    console.log(amountBigInt, "amountBigInt")
+
+    const tx = await contract.exchange(tokenSymbol, amountBigInt, isBuying);
     await tx.wait();
-    await logAudit("Exchange", null, user, {
-      tokenSymbol,
-      amount: amount.toString(),
-      isBuying,
-    });
+
+    console.log(`Exchange successful: ${amount} ${tokenSymbol} ${isBuying ? "bought" : "sold"}`);
   } catch (error) {
-    await logAudit("ExchangeFailed", error, user, {
-      tokenSymbol,
-      amount: amount.toString(),
-      isBuying,
-    });
+    console.error("Exchange failed:", error.message);
     throw error;
   }
 }
+
 
 /**
  * Calculates the exchange output amount

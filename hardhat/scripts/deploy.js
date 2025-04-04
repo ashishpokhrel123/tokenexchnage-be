@@ -1,46 +1,67 @@
-// Import required libraries
 const { ethers } = require("hardhat");
 
 async function main() {
-    // Get the deployer account and network information
-    const [deployer] = await ethers.getSigners();
-    const network = await ethers.provider.getNetwork();
+  // Get the deployer account and network information
+  const [deployer] = await ethers.getSigners();
+  const network = await ethers.provider.getNetwork();
 
-    console.log("\n=== Deploying DajuToken ===");
-    console.log(`Network: ${network.name} (Chain ID: ${network.chainId})`);
-    console.log(`Deployer address: ${deployer.address}`);
-    // console.log(`Deployer balance: ${ethers.formatEther(await deployer.getBalance())} ETH`);
+  console.log("\n=== Deploying Contracts ===");
+  console.log(`Network: ${network.name} (Chain ID: ${network.chainId})`);
+  console.log(`Deployer address: ${deployer.address}`);
 
-    // Deployment parameters
-    const initialOwner = deployer.address; // Can be changed to a multisig or other address
-    const cap = ethers.parseUnits("1000000", 18); // 1 million tokens with 18 decimals
+  // Deploy MockUSDC
+  console.log("\nDeploying MockUSDC...");
+  const MockUSDC = await ethers.getContractFactory("MockUSDC");
+  const usdc = await MockUSDC.deploy();
+  await usdc.waitForDeployment();
+  const usdcAddress = await usdc.getAddress();
+  console.log(`MockUSDC deployed to: ${usdcAddress}`);
 
-    console.log("\nDeployment Parameters:");
-    console.log(`- Initial Owner: ${initialOwner}`);
-    console.log(`- Token Cap: ${ethers.formatEther(cap)} DAJU`);
+  // Mint some extra USDC to deployer (optional)
+  const usdcMintAmount = ethers.parseUnits("10000", 6); // 10,000 USDC
+  await usdc.mint(deployer.address, usdcMintAmount);
+  console.log(`Minted ${ethers.formatUnits(usdcMintAmount, 6)} USDC to deployer`);
 
-    // Deploy the contract
-    console.log("\nDeploying DajuToken...");
-    const DajuToken = await ethers.getContractFactory("DajuToken");
-    const dajuToken = await DajuToken.deploy(initialOwner, cap);
+  // Deploy DajuToken
+  console.log("\nDeploying DajuToken...");
+  const initialOwner = deployer.address;
+  const cap = ethers.parseUnits("10000000", 18); // 10 million tokens with 18 decimals
+  const DajuToken = await ethers.getContractFactory("DajuToken");
+  const dajuToken = await DajuToken.deploy(initialOwner, cap);
+  await dajuToken.waitForDeployment();
+  const dajuTokenAddress = await dajuToken.getAddress();
+  console.log(`DajuToken deployed to: ${dajuTokenAddress}`);
 
-    // Wait for deployment to complete
-    await dajuToken.waitForDeployment();
+  // Update USDC address in DajuToken (since constructor uses a placeholder)
+  console.log("\nUpdating USDC address in DajuToken...");
+  await dajuToken.setTokenAddress("USDC", usdcAddress);
+  console.log(`Set USDC address to: ${usdcAddress}`);
 
-    console.log("\n=== Deployment Successful ===");
-    console.log(`DajuToken deployed to: ${await dajuToken.getAddress()}`);
+  // Mint some extra DAJU to deployer (optional)
+  const dajuMintAmount = ethers.parseUnits("1000", 18); // Mint 1000 DAJU tokens to deployer
+  await dajuToken.mint(deployer.address, dajuMintAmount);
+  console.log(`Minted ${ethers.formatEther(dajuMintAmount)} DAJU to deployer`);
 
-    // Useful for verification
-    console.log("\nConstructor Arguments:");
-    console.log(`- Initial Owner: ${initialOwner}`);
-    console.log(`- Cap: ${cap.toString()}`);
+  console.log("\n=== Deployment Successful ===");
+  console.log("\nDeployed Contract Addresses:");
+  console.log(`- MockUSDC: ${usdcAddress}`);
+  console.log(`- DajuToken: ${dajuTokenAddress}`);
+
+  console.log("\nConstructor Arguments:");
+  console.log(`- MockUSDC: None (simple deployment)`);
+  console.log(`- DajuToken:`);
+  console.log(`  - Initial Owner: ${initialOwner}`);
+  console.log(`  - Cap: ${ethers.formatEther(cap)} DAJU`);
+
+  console.log("\nAdditional Setup:");
+  console.log(`- USDC Address in DajuToken: ${usdcAddress}`);
 }
 
 // Execute and handle errors
 main()
-    .then(() => process.exit(0))
-    .catch((error) => {
-        console.error("\n!!! Deployment Failed !!!");
-        console.error(error);
-        process.exit(1);
-    });
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error("\n!!! Deployment Failed !!!");
+    console.error(error);
+    process.exit(1);
+  });

@@ -6,12 +6,20 @@ const router = express.Router();
 
 router.get("/tokens", async (req, res) => {
   try {
-    const { supportedTokens, tokenRates, tokenAddresses } =
-      await controller.fetchSupportedTokens();
-
-    const tokens = supportedTokens.map((symbol, index) => ({
-      symbol,
-      rate: tokenRates[index].toString(),
+     const tokenData = await controller.fetchSupportedTokens();
+    
+    // Process token information
+    const tokens = await Promise.all(tokenData.supportedTokens.map(async (symbol) => {
+      // Get detailed token info from contract
+      const tokenInfo = await contract.getTokenInfo(symbol);
+      
+      return {
+        symbol,
+        rate: tokenInfo.rate.toString(),
+        address: tokenInfo.tokenAddress,
+        decimals: tokenInfo.decimals,
+        // Add additional metadata if needed
+      };
     }));
 
     res.status(200).json({
@@ -19,7 +27,11 @@ router.get("/tokens", async (req, res) => {
       data: {
         tokens,
         count: tokens.length,
-      },
+        // Add contract metadata
+        contractAddress: contract.address,
+        network: process.env.NETWORK || 'localhost',
+        lastUpdated: new Date().toISOString()
+      }
     });
   } catch (error) {
     console.error("Token fetch error:", error);
@@ -45,12 +57,12 @@ router.post("/exchange", async (req, res, next) => {
   try {
     const { tokenSymbol, amount, isBuying } = req.body;
     const user = req.headers["user-address"] || "anonymous";
-
-    if (!tokenSymbol || !amount || typeof isBuying !== "boolean") {
+    console.log(tokenSymbol, amount, isBuying)
+    if (!tokenSymbol || !amount ||  isBuying !== true) {
       throw new Error("Missing required parameters");
     }
 
-    await controller.exchange(user, tokenSymbol, BigInt(amount), isBuying);
+    await controller.exchange(user, tokenSymbol, amount, isBuying);
     res.json({
       success: true,
       message: "Exchange completed successfully",
