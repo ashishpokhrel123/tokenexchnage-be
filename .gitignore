@@ -5,3 +5,4 @@ package-lock.json
 src/hardhat/artifacts/
 src/hardhat/cache/
 src/hardhat/typechain-types/
+./logs/

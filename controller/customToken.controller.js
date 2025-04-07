@@ -1,254 +1,333 @@
 const { ethers } = require("ethers");
 const config = require("../config/config");
-const { getContractAbi, getUSDCContractAbi } = require("../helpers/contractHelper");
+const {
+  getContractAbi,
+  getExchangeManagerAbi,
+  getUSDCContractAbi,
+} = require("../helpers/contractHelper");
+const { info, error, debug } = require("../utils/logger");
 
-const tokenAbi = getContractAbi();
-const usdcAbi = getUSDCContractAbi();
-console.log(config.rpcUrl);
+// Initialize Provider and Wallet
 const provider = new ethers.JsonRpcProvider(config.rpcUrl);
 const wallet = new ethers.Wallet(config.ownerPrivateKey, provider);
-const otherWallet = new ethers.Wallet(config.ANOTHER_PRIVATE_KEY, provider);
-const contract = new ethers.Contract(config.contractAddress, tokenAbi, wallet);
-const usdcContract = new ethers.Contract(config.MOCKHSDC_CONTRACT_ADDRESS, usdcAbi, wallet );
 
-/**
- * Fetches supported tokens and their exchange rates
- * @returns {} Supported tokens and rates
- */
-async function fetchSupportedTokens() {
-  try {
-    const supportedTokens = await contract.getSupportedTokens();
-    
-    // Fetch additional token data in parallel
-    const tokenDetails = await Promise.all(
-      supportedTokens.map(symbol => contract.getTokenInfo(symbol))
-    );
+// Initialize Contracts
+const dajuTokenContract = new ethers.Contract(
+  config.contractAddress, 
+  getContractAbi(),
+  wallet
+);
 
-    return {
-      supportedTokens,
-      tokenDetails: tokenDetails.map(detail => ({
-        rate: detail.rate.toString(),
-        address: detail.tokenAddress,
-        decimals: detail.decimals
-      }))
+const exchangeManagerContract = new ethers.Contract(
+  config.exchangeManagerAddress, // New config field for ExchangeManager address
+  getExchangeManagerAbi(),
+  wallet
+);
+
+const usdcContract = new ethers.Contract(
+  config.MOCKHSDC_CONTRACT_ADDRESS,
+  getUSDCContractAbi(),
+  wallet
+);
+
+class TokenController {
+  constructor() {
+    this.dajuToken = dajuTokenContract;
+    this.exchangeManager = exchangeManagerContract;
+    this.usdcContract = usdcContract;
+    this.provider = provider;
+    this.decimals = {
+      USDC: 6,
+      DAJU: 18,
+      SUPPORTED_TOKEN: config.SUPPORTED_TOKEN_DECIMALS || 6,
     };
-   
-  } catch (error) {
-    console.log("Error fetching supported tokens:", error);
-    throw error;
   }
-}
 
+  /** Private Utility Methods **/
 
-
-/**
- * Performs a token exchange
- * @param {string} user - User address initiating the exchange
- * @param {string} tokenSymbol - Token symbol to exchange
- * @param {string | number} amount - Amount to exchange (as a string or number)
- * @param {boolean} isBuying - True if buying, false if selling
- * @returns {Promise<void>}
- */
-async function exchange(account, tokenSymbol, amount, isBuying) {
-  try {
-   
-    const amountBigInt = ethers.parseUnits(amount.toString(), 18); 
-
-    console.log(amountBigInt, "amountBigInt")
-
-    const tx = await contract.exchange(tokenSymbol, amountBigInt, isBuying);
-    await tx.wait();
-
-    console.log(`Exchange successful: ${amount} ${tokenSymbol} ${isBuying ? "bought" : "sold"}`);
-  } catch (error) {
-    console.error("Exchange failed:", error.message);
-    throw error;
-  }
-}
-
-
-/**
- * Calculates the exchange output amount
- * @param {string} tokenSymbol Token symbol to calculate for
- * @param {bigint} amount Input amount
- * @param {boolean} isBuying True if buying, false if selling
- * @returns {Promise<bigint>} Calculated output amount
- */
-async function calculateExchange(tokenSymbol, amount, isBuying) {
-  try {
-    const outputAmount = await contract.calculateExchange(
-      tokenSymbol,
-      amount,
-      isBuying
-    );
-    return outputAmount;
-  } catch (error) {
-    await logAudit("CalculateExchangeFailed", error, null, {
-      tokenSymbol,
-      amount: amount.toString(),
-      isBuying,
-    });
-    throw error;
-  }
-}
-
-/**
- * Adds a new supported token (admin only)
- * @param {string} user User address (should have EXCHANGE_MANAGER_ROLE)
- * @param {string} tokenSymbol Token symbol
- * @param {string} tokenAddress Token contract address
- * @param {bigint} initialRate Initial exchange rate
- * @param {number} decimals Token decimals
- * @returns {Promise<void>}
- */
-async function addSupportedToken(
-  user,
-  tokenSymbol,
-  tokenAddress,
-  initialRate,
-  decimals
-) {
-  try {
-    const tx = await contract.addSupportedToken(
-      tokenSymbol,
-      tokenAddress,
-      initialRate,
-      decimals
-    );
-    await tx.wait();
-    await logAudit("AddSupportedToken", null, user, {
-      tokenSymbol,
-      tokenAddress,
-      initialRate: initialRate.toString(),
-    });
-  } catch (error) {
-    await logAudit("AddSupportedTokenFailed", error, user, {
-      tokenSymbol,
-      tokenAddress,
-    });
-    throw error;
-  }
-}
-
-/**
- * Updates exchange rate (admin only)
- * @param {string} user User address (should have EXCHANGE_MANAGER_ROLE)
- * @param {string} tokenSymbol Token symbol
- * @param {bigint} newRate New exchange rate
- * @returns {Promise<void>}
- */
-async function updateExchangeRate(user, tokenSymbol, newRate) {
-  try {
-    const tx = await contract.updateExchangeRate(tokenSymbol, newRate);
-    await tx.wait();
-    await logAudit("UpdateExchangeRate", null, user, {
-      tokenSymbol,
-      newRate: newRate.toString(),
-    });
-  } catch (error) {
-    await logAudit("UpdateExchangeRateFailed", error, user, { tokenSymbol });
-    throw error;
-  }
-}
-
-/**
- * Fetches the contract owner
- * @returns {Promise<string>} Owner address
- */
-async function getOwner() {
-  try {
-    const owner = await contract.owner();
-    await logAudit("GetOwner", null, wallet.address, { owner });
-    return owner;
-  } catch (error) {
-    await logAudit("GetOwnerFailed", error);
-    throw error;
-  }
-}
-
-/**
- * Listens to contract events
- * @param {Function} callback Function to handle events
- */
-function listenToEvents(callback) {
-  contract.on(
-    "ExchangeCompleted",
-    async (user, tokenSymbol, inputAmount, outputAmount, isBuying) => {
-      await handleEvent(
-        "ExchangeCompleted",
-        { user, tokenSymbol, inputAmount, outputAmount, isBuying },
-        callback
-      );
+  _validateAmount(amount, paramName) {
+    if (!amount || isNaN(amount) || Number(amount) <= 0) {
+      const errorMsg = `Invalid ${paramName}: must be a positive number`;
+      error(errorMsg, { amount });
+      throw new Error(errorMsg);
     }
-  );
+  }
 
-  contract.on("ExchangeRateUpdated", async (tokenSymbol, oldRate, newRate) => {
-    await handleEvent(
-      "ExchangeRateUpdated",
-      { tokenSymbol, oldRate, newRate },
-      callback
-    );
-  });
+  _parseEtherAmount(amount, paramName) {
+    this._validateAmount(amount, paramName);
+    return ethers.parseEther(amount);
+  }
 
-  contract.on(
-    "TokenSupported",
-    async (tokenSymbol, tokenAddress, initialRate) => {
-      await handleEvent(
-        "TokenSupported",
-        { tokenSymbol, tokenAddress, initialRate },
-        callback
-      );
+  async _executeTx(contract, methodName, args = [], options = {}, successMessage) {
+    info(`Executing transaction: ${successMessage}`, { args });
+    try {
+      const method = contract[methodName];
+      const tx = await method(...args, options);
+      const receipt = await tx.wait();
+      info(`${successMessage} - Transaction completed`, {
+        txHash: receipt.hash,
+      });
+      return { txHash: receipt.hash };
+    } catch (err) {
+      error(`Transaction failed: ${successMessage}`, { error: err.message });
+      throw err;
     }
-  );
+  }
+
+  async _checkUSDCReserves(ethAmount) {
+    const rate = BigInt(await this.exchangeManager.usdcToEthRate());
+    const usdcRequired = (ethAmount * rate) / BigInt(1e12); // Adjust scaling as per contract
+    const usdcBalance = await this.exchangeManager.getUSDCBalance();
+    if (usdcBalance < usdcRequired) {
+      const errorMsg =
+        `Insufficient USDC reserves: ${ethers.formatUnits(
+          usdcRequired,
+          this.decimals.USDC
+        )} USDC required, ` +
+        `${ethers.formatUnits(usdcBalance, this.decimals.USDC)} available`;
+      error(errorMsg, { usdcRequired, usdcBalance });
+      throw new Error(errorMsg);
+    }
+    debug(`USDC reserves check passed`, {
+      available: ethers.formatUnits(usdcBalance, this.decimals.USDC),
+    });
+  }
+
+  _enhanceError(err, message) {
+    const enhancedError = `${message}: ${err.message}`;
+    error(enhancedError, { originalError: err.message });
+    return new Error(enhancedError);
+  }
+
+  /** Public Methods **/
+
+  async getTokenInfo() {
+    info("Fetching token info");
+    try {
+      const [
+        name,
+        symbol,
+        cap,
+        totalSupply,
+        paused,
+        usdcAddress,
+        usdcToEthRate,
+        usdcToDajuRate,
+      ] = await Promise.all([
+        this.dajuToken.name(),
+        this.dajuToken.symbol(),
+        this.dajuToken.CAP(),
+        this.dajuToken.totalSupply(),
+        this.exchangeManager.paused(),
+        this.exchangeManager.usdcAddress(),
+        this.exchangeManager.usdcToEthRate(),
+        this.exchangeManager.usdcToDajuRate(),
+      ]);
+
+      const [ethBalance, usdcBalance] = await Promise.all([
+        this.provider.getBalance(this.exchangeManager.target),
+        this.exchangeManager.getUSDCBalance(),
+      ]);
+
+      const result = {
+        success: true,
+        data: {
+          token: {
+            name,
+            symbol,
+            cap: ethers.formatEther(cap),
+            totalSupply: ethers.formatEther(totalSupply),
+          },
+          rates: {
+            usdcToEth: ethers.formatUnits(usdcToEthRate, 12), // Adjust scaling based on contract
+            usdcToDaju: ethers.formatUnits(usdcToDajuRate, 12),
+          },
+          balances: {
+            eth: ethers.formatEther(ethBalance),
+            usdc: ethers.formatUnits(usdcBalance, this.decimals.USDC),
+          },
+          addresses: {
+            dajuToken: config.dajuTokenAddress,
+            exchangeManager: config.exchangeManagerAddress,
+            usdc: usdcAddress,
+          },
+          state: { paused },
+        },
+      };
+
+      info(`Token info fetched successfully`, { name, symbol });
+      return result;
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to fetch token info");
+    }
+  }
+
+  async buyETHWithUSDC(amount) {
+    info(`Initiating buyETHWithUSDC`, { amount });
+    try {
+      this._validateAmount(amount, "USDC amount");
+      const amountBigInt = ethers.parseUnits(amount, this.decimals.USDC);
+
+      const contractUsdcAddress = await this.exchangeManager.usdcAddress();
+      if (
+        this.usdcContract.target.toLowerCase() !==
+        contractUsdcAddress.toLowerCase()
+      ) {
+        const errorMsg = "USDC address mismatch";
+        error(errorMsg, {
+          expected: contractUsdcAddress,
+          actual: this.usdcContract.target,
+        });
+        throw new Error(errorMsg);
+      }
+
+      await this._executeTx(
+        this.usdcContract,
+        "approve",
+        [this.exchangeManager.target, amountBigInt],
+        {},
+        `Approved ${amount} USDC for buying ETH`
+      );
+
+      const ethBalance = await this.provider.getBalance(this.exchangeManager.target);
+      const ethRequired =
+        (amountBigInt * BigInt(1e18)) /
+        (BigInt(await this.exchangeManager.usdcToEthRate()) * BigInt(1e6)); // Adjust scaling
+
+      if (ethBalance < ethRequired) {
+        const errorMsg = `Insufficient ETH reserves: ${ethers.formatEther(
+          ethRequired
+        )} ETH required`;
+        error(errorMsg, { available: ethers.formatEther(ethBalance) });
+        throw new Error(errorMsg);
+      }
+
+      return await this._executeTx(
+        this.exchangeManager,
+        "buyETHWithUSDC",
+        [amountBigInt],
+        {},
+        `Bought ETH with ${amount} USDC`
+      );
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to buy ETH with USDC");
+    }
+  }
+
+  async sellETHForUSDC(amount) {
+    info(`Initiating sellETHForUSDC`, { amount });
+    try {
+      const ethAmount = this._parseEtherAmount(amount, "ETH amount");
+      const usdcBalance = await this.exchangeManager.getUSDCBalance();
+      if (usdcBalance === BigInt(0)) {
+        const warningMsg = "Contract has no USDC reserves available";
+        error(warningMsg);
+        throw new Error(warningMsg);
+      }
+      await this._checkUSDCReserves(ethAmount);
+
+      return await this._executeTx(
+        this.exchangeManager,
+        "sellETHForUSDC",
+        [],
+        { value: ethAmount },
+        `Sold ${amount} ETH for USDC`
+      );
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to sell ETH for USDC");
+    }
+  }
+
+  async exchangeUSDCForDAJU(amount) {
+    info(`Initiating exchangeUSDCForDAJU`, { amount });
+    try {
+      this._validateAmount(amount, "USDC amount");
+      const amountBigInt = ethers.parseUnits(amount, this.decimals.USDC);
+
+      await this._executeTx(
+        this.usdcContract,
+        "approve",
+        [this.exchangeManager.target, amountBigInt],
+        {},
+        `Approved ${amount} USDC for DAJU exchange`
+      );
+
+      return await this._executeTx(
+        this.exchangeManager,
+        "exchangeUSDCForDAJU",
+        [amountBigInt],
+        {},
+        `Exchanged ${amount} USDC for DAJU`
+      );
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to exchange USDC for DAJU");
+    }
+  }
+
+  async exchangeDAJUForUSDC(amount) {
+    info(`Initiating exchangeDAJUForUSDC`, { amount });
+    try {
+      this._validateAmount(amount, "DAJU amount");
+      const amountBigInt = ethers.parseUnits(amount, this.decimals.DAJU);
+
+      // Approve ExchangeManager to spend DAJU from wallet
+      await this._executeTx(
+        this.dajuToken,
+        "approve",
+        [this.exchangeManager.target, amountBigInt],
+        {},
+        `Approved ${amount} DAJU for USDC exchange`
+      );
+
+      return await this._executeTx(
+        this.exchangeManager,
+        "exchangeDAJUForUSDC",
+        [amountBigInt],
+        {},
+        `Exchanged ${amount} DAJU for USDC`
+      );
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to exchange DAJU for USDC");
+    }
+  }
+
+  async calculateETHAmount(usdcAmount) {
+    info(`Calculating ETH amount`, { usdcAmount });
+    try {
+      this._validateAmount(usdcAmount, "USDC amount");
+      const amountBigInt = ethers.parseUnits(usdcAmount, this.decimals.USDC);
+      const ethAmount = await this.exchangeManager.calculateETHAmount(amountBigInt);
+      const result = ethers.formatEther(ethAmount);
+      debug(`ETH amount calculated`, { result });
+      return result;
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to calculate ETH amount");
+    }
+  }
+
+  async calculateUSDCAmount(ethAmount) {
+    info(`Calculating USDC amount`, { ethAmount });
+    try {
+      this._validateAmount(ethAmount, "ETH amount");
+      const amountBigInt = ethers.parseEther(ethAmount);
+      const usdcAmount = await this.exchangeManager.calculateUSDCAmount(amountBigInt);
+      const result = ethers.formatUnits(usdcAmount, this.decimals.USDC);
+      debug(`USDC amount calculated`, { result });
+      return result;
+    } catch (err) {
+      throw this._enhanceError(err, "Failed to calculate USDC amount");
+    }
+  }
 }
 
-/**
- * Handles contract events and logs them
- * @param {string} eventName Event name
- * @param {Object} eventData Event data
- * @param {Function} callback Callback function
- */
-async function handleEvent(eventName, eventData, callback) {
-  const formattedData = {
-    event: eventName,
-    ...Object.fromEntries(
-      Object.entries(eventData).map(([key, value]) => [
-        key,
-        typeof value === "bigint" ? Number(value) : value,
-      ])
-    ),
-  };
-  callback(formattedData);
-  await logAudit("ContractEvent", null, wallet.address, formattedData);
-}
-
-/**
- * Helper function to log audit events
- * @param {string} eventType Event type
- * @param {Error|null} error Error object if any
- * @param {string} userAddress User address
- * @param {Object} details Additional details
- */
-async function logAudit(
-  eventType,
-  error,
-  userAddress = wallet.address,
-  details = {}
-) {
-  const logDetails = error ? { error: error.message, ...details } : details;
-  await AuditLogRepository.save({
-    eventType,
-    address: userAddress,
-    details: logDetails,
-  });
-}
+const controllerInstance = new TokenController();
 
 module.exports = {
-  fetchSupportedTokens,
-  exchange,
-  calculateExchange,
-  addSupportedToken,
-  updateExchangeRate,
-  getOwner,
-  listenToEvents,
+  getTokenInfo: controllerInstance.getTokenInfo.bind(controllerInstance),
+  buyETHWithUSDC: controllerInstance.buyETHWithUSDC.bind(controllerInstance),
+  sellETHForUSDC: controllerInstance.sellETHForUSDC.bind(controllerInstance),
+  exchangeUSDCForDAJU: controllerInstance.exchangeUSDCForDAJU.bind(controllerInstance),
+  exchangeDAJUForUSDC: controllerInstance.exchangeDAJUForUSDC.bind(controllerInstance),
+  calculateETHAmount: controllerInstance.calculateETHAmount.bind(controllerInstance),
+  calculateUSDCAmount: controllerInstance.calculateUSDCAmount.bind(controllerInstance),
 };

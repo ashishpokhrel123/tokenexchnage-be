@@ -1,0 +1,20 @@
+2025-04-07 13:55:45 [INFO]: Initiating sellETHForUSDC | Metadata: {"amount":"0.05"}
+2025-04-07 13:55:45 [ERROR]: Failed to sell ETH for USDC: Do not know how to serialize a BigInt | Metadata: {"originalError":"Do not know how to serialize a BigInt"}
+2025-04-07 13:57:43 [INFO]: Initiating sellETHForUSDC | Metadata: {"amount":"0.05"}
+2025-04-07 13:57:43 [ERROR]: Insufficient USDC reserves: 100000000.0 USDC required, 0.0 available | Metadata: {"usdcRequired":"100000000000000","usdcBalance":"0"}
+2025-04-07 13:57:43 [ERROR]: Failed to sell ETH for USDC: Insufficient USDC reserves: 100000000.0 USDC required, 0.0 available | Metadata: {"originalError":"Insufficient USDC reserves: 100000000.0 USDC required, 0.0 available"}
+2025-04-07 14:16:07 [INFO]: Initiating sellETHForUSDC | Metadata: {"amount":"0.000001"}
+2025-04-07 14:16:07 [ERROR]: Insufficient USDC reserves: 2000.0 USDC required, 0.0 available | Metadata: {"usdcRequired":"2000000000","usdcBalance":"0"}
+2025-04-07 14:16:07 [ERROR]: Failed to sell ETH for USDC: Insufficient USDC reserves: 2000.0 USDC required, 0.0 available | Metadata: {"originalError":"Insufficient USDC reserves: 2000.0 USDC required, 0.0 available"}
+2025-04-07 14:37:08 [INFO]: Initiating sellETHForUSDC | Metadata: {"amount":"0.000001"}
+2025-04-07 14:37:08 [ERROR]: Failed to sell ETH for USDC: usdcBalance is not defined | Metadata: {"originalError":"usdcBalance is not defined"}
+2025-04-07 14:37:48 [INFO]: Initiating sellETHForUSDC | Metadata: {"amount":"0.000001"}
+2025-04-07 14:37:48 [ERROR]: Failed to sell ETH for USDC: warn is not defined | Metadata: {"originalError":"warn is not defined"}
+2025-04-07 14:38:42 [INFO]: Initiating sellETHForUSDC | Metadata: {"amount":"0.000001"}
+2025-04-07 14:38:42 [ERROR]: Contract has no USDC reserves available
+2025-04-07 14:38:42 [ERROR]: Failed to sell ETH for USDC: Contract has no USDC reserves available | Metadata: {"originalError":"Contract has no USDC reserves available"}
+2025-04-07 16:08:31 [INFO]: Initiating buyETHWithUSDC | Metadata: {"amount":"10"}
+2025-04-07 16:08:31 [INFO]: Executing transaction: Approved 10 USDC for buying ETH | Metadata: {"args":["0x86A2EE8FAf9A840F7a2c64CA3d51209F9A02081D","10000000"]}
+2025-04-07 16:08:35 [INFO]: Approved 10 USDC for buying ETH - Transaction completed | Metadata: {"txHash":"0x4eb67e3ff9ca2051165cedf3fc3a512a5b883fbbdc7f05b36cc6bdff78e660f0"}
+2025-04-07 16:08:35 [ERROR]: Insufficient ETH reserves: 0.000000000000005 ETH required | Metadata: {"available":"0.0"}
+2025-04-07 16:08:35 [ERROR]: Failed to buy ETH with USDC: Insufficient ETH reserves: 0.000000000000005 ETH required | Metadata: {"originalError":"Insufficient ETH reserves: 0.000000000000005 ETH required"}
