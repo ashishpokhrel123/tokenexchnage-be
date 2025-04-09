@@ -6,328 +6,396 @@ const {
   getUSDCContractAbi,
 } = require("../helpers/contractHelper");
 const { info, error, debug } = require("../utils/logger");
-
-// Initialize Provider and Wallet
-const provider = new ethers.JsonRpcProvider(config.rpcUrl);
-const wallet = new ethers.Wallet(config.ownerPrivateKey, provider);
-
-// Initialize Contracts
-const dajuTokenContract = new ethers.Contract(
-  config.contractAddress, 
-  getContractAbi(),
-  wallet
-);
-
-const exchangeManagerContract = new ethers.Contract(
-  config.exchangeManagerAddress, // New config field for ExchangeManager address
-  getExchangeManagerAbi(),
-  wallet
-);
-
-const usdcContract = new ethers.Contract(
-  config.MOCKHSDC_CONTRACT_ADDRESS,
-  getUSDCContractAbi(),
-  wallet
-);
+const {
+  formatSuccessResponse,
+  formatErrorResponse,
+} = require("../utils/common/Response/responseUtils");
+const { NonceManager } = require("../utils/common/NonceHelper/nonceUtils");
 
 class TokenController {
   constructor() {
-    this.dajuToken = dajuTokenContract;
-    this.exchangeManager = exchangeManagerContract;
-    this.usdcContract = usdcContract;
-    this.provider = provider;
+    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    this.wallet = new ethers.Wallet(config.ownerPrivateKey, this.provider);
+    this.nonceManager = new NonceManager(this.provider, this.wallet);
     this.decimals = {
       USDC: 6,
       DAJU: 18,
       SUPPORTED_TOKEN: config.SUPPORTED_TOKEN_DECIMALS || 6,
     };
+    this._initializeContracts();
+    debug("TokenController initialized", { rpcUrl: config.rpcUrl });
   }
 
-  /** Private Utility Methods **/
-
-  _validateAmount(amount, paramName) {
-    if (!amount || isNaN(amount) || Number(amount) <= 0) {
-      const errorMsg = `Invalid ${paramName}: must be a positive number`;
-      error(errorMsg, { amount });
-      throw new Error(errorMsg);
-    }
-  }
-
-  _parseEtherAmount(amount, paramName) {
-    this._validateAmount(amount, paramName);
-    return ethers.parseEther(amount);
-  }
-
-  async _executeTx(contract, methodName, args = [], options = {}, successMessage) {
-    info(`Executing transaction: ${successMessage}`, { args });
-    try {
-      const method = contract[methodName];
-      const tx = await method(...args, options);
-      const receipt = await tx.wait();
-      info(`${successMessage} - Transaction completed`, {
-        txHash: receipt.hash,
-      });
-      return { txHash: receipt.hash };
-    } catch (err) {
-      error(`Transaction failed: ${successMessage}`, { error: err.message });
-      throw err;
-    }
-  }
-
-  async _checkUSDCReserves(ethAmount) {
-    const rate = BigInt(await this.exchangeManager.usdcToEthRate());
-    const usdcRequired = (ethAmount * rate) / BigInt(1e12); // Adjust scaling as per contract
-    const usdcBalance = await this.exchangeManager.getUSDCBalance();
-    if (usdcBalance < usdcRequired) {
-      const errorMsg =
-        `Insufficient USDC reserves: ${ethers.formatUnits(
-          usdcRequired,
-          this.decimals.USDC
-        )} USDC required, ` +
-        `${ethers.formatUnits(usdcBalance, this.decimals.USDC)} available`;
-      error(errorMsg, { usdcRequired, usdcBalance });
-      throw new Error(errorMsg);
-    }
-    debug(`USDC reserves check passed`, {
-      available: ethers.formatUnits(usdcBalance, this.decimals.USDC),
-    });
-  }
-
-  _enhanceError(err, message) {
-    const enhancedError = `${message}: ${err.message}`;
-    error(enhancedError, { originalError: err.message });
-    return new Error(enhancedError);
-  }
-
-  /** Public Methods **/
-
-  async getTokenInfo() {
-    info("Fetching token info");
-    try {
-      const [
-        name,
-        symbol,
-        cap,
-        totalSupply,
-        paused,
-        usdcAddress,
-        usdcToEthRate,
-        usdcToDajuRate,
-      ] = await Promise.all([
-        this.dajuToken.name(),
-        this.dajuToken.symbol(),
-        this.dajuToken.CAP(),
-        this.dajuToken.totalSupply(),
-        this.exchangeManager.paused(),
-        this.exchangeManager.usdcAddress(),
-        this.exchangeManager.usdcToEthRate(),
-        this.exchangeManager.usdcToDajuRate(),
-      ]);
-
-      const [ethBalance, usdcBalance] = await Promise.all([
-        this.provider.getBalance(this.exchangeManager.target),
-        this.exchangeManager.getUSDCBalance(),
-      ]);
-
-      const result = {
-        success: true,
-        data: {
-          token: {
-            name,
-            symbol,
-            cap: ethers.formatEther(cap),
-            totalSupply: ethers.formatEther(totalSupply),
-          },
-          rates: {
-            usdcToEth: ethers.formatUnits(usdcToEthRate, 12), // Adjust scaling based on contract
-            usdcToDaju: ethers.formatUnits(usdcToDajuRate, 12),
-          },
-          balances: {
-            eth: ethers.formatEther(ethBalance),
-            usdc: ethers.formatUnits(usdcBalance, this.decimals.USDC),
-          },
-          addresses: {
-            dajuToken: config.dajuTokenAddress,
-            exchangeManager: config.exchangeManagerAddress,
-            usdc: usdcAddress,
-          },
-          state: { paused },
-        },
-      };
-
-      info(`Token info fetched successfully`, { name, symbol });
-      return result;
-    } catch (err) {
-      throw this._enhanceError(err, "Failed to fetch token info");
-    }
+  _initializeContracts() {
+    this.dajuToken = new ethers.Contract(
+      config.contractAddress,
+      getContractAbi(),
+      this.wallet
+    );
+    this.exchangeManager = new ethers.Contract(
+      config.exchangeManagerAddress,
+      getExchangeManagerAbi(),
+      this.wallet
+    );
+    this.usdcContract = new ethers.Contract(
+      config.MOCKHSDC_CONTRACT_ADDRESS,
+      getUSDCContractAbi(),
+      this.wallet
+    );
   }
 
   async buyETHWithUSDC(amount) {
-    info(`Initiating buyETHWithUSDC`, { amount });
     try {
-      this._validateAmount(amount, "USDC amount");
-      const amountBigInt = ethers.parseUnits(amount, this.decimals.USDC);
+      debug("Starting buyETHWithUSDC", { amount });
+      const usdcAmount = this._parseUnits(amount, this.decimals.USDC);
+      const senderAddress = await this.wallet.getAddress();
 
-      const contractUsdcAddress = await this.exchangeManager.usdcAddress();
-      if (
-        this.usdcContract.target.toLowerCase() !==
-        contractUsdcAddress.toLowerCase()
-      ) {
-        const errorMsg = "USDC address mismatch";
-        error(errorMsg, {
-          expected: contractUsdcAddress,
-          actual: this.usdcContract.target,
-        });
-        throw new Error(errorMsg);
-      }
+      await this._verifyUSDCBalance(senderAddress, usdcAmount);
+      await this._verifyETHReserves(usdcAmount);
 
-      await this._executeTx(
-        this.usdcContract,
-        "approve",
-        [this.exchangeManager.target, amountBigInt],
-        {},
-        `Approved ${amount} USDC for buying ETH`
+      await this.nonceManager.executeTransaction((options) =>
+        this.usdcContract.approve(
+          this.exchangeManager.address,
+          usdcAmount,
+          options
+        )
       );
 
-      const ethBalance = await this.provider.getBalance(this.exchangeManager.target);
-      const ethRequired =
-        (amountBigInt * BigInt(1e18)) /
-        (BigInt(await this.exchangeManager.usdcToEthRate()) * BigInt(1e6)); // Adjust scaling
-
-      if (ethBalance < ethRequired) {
-        const errorMsg = `Insufficient ETH reserves: ${ethers.formatEther(
-          ethRequired
-        )} ETH required`;
-        error(errorMsg, { available: ethers.formatEther(ethBalance) });
-        throw new Error(errorMsg);
-      }
-
-      return await this._executeTx(
-        this.exchangeManager,
-        "buyETHWithUSDC",
-        [amountBigInt],
-        {},
-        `Bought ETH with ${amount} USDC`
+      const receipt = await this.nonceManager.executeTransaction((options) =>
+        this.exchangeManager.buyETHWithUSDC(usdcAmount, {
+          ...options,
+          gasLimit: 300000,
+        })
       );
+
+      const ethReceived = await this._calculateExpectedETH(usdcAmount);
+      const actualEthReceived = await this._getActualETHReceived(
+        senderAddress,
+        receipt
+      );
+
+      const data = {
+        transactionHash: receipt.hash,
+        ethReceived: ethers.formatEther(ethReceived),
+        actualEthReceived: ethers.formatEther(actualEthReceived),
+      };
+
+      info("Successfully bought ETH with USDC", {
+        amount,
+        ethReceived: data.ethReceived,
+        txHash: receipt.hash,
+      });
+      return formatSuccessResponse(data, "Successfully bought ETH with USDC");
     } catch (err) {
-      throw this._enhanceError(err, "Failed to buy ETH with USDC");
+      error("Failed to buy ETH with USDC", { amount, error: err.message });
+      return formatErrorResponse(`Failed to buy ETH: ${err.message}`, 500);
     }
   }
 
   async sellETHForUSDC(amount) {
-    info(`Initiating sellETHForUSDC`, { amount });
     try {
-      const ethAmount = this._parseEtherAmount(amount, "ETH amount");
-      const usdcBalance = await this.exchangeManager.getUSDCBalance();
-      if (usdcBalance === BigInt(0)) {
-        const warningMsg = "Contract has no USDC reserves available";
-        error(warningMsg);
-        throw new Error(warningMsg);
+      debug("Starting sellETHForUSDC", { amount });
+      if (!amount || isNaN(amount)) {
+        return formatErrorResponse("Invalid ETH amount provided", 400);
       }
-      await this._checkUSDCReserves(ethAmount);
 
-      return await this._executeTx(
-        this.exchangeManager,
-        "sellETHForUSDC",
-        [],
-        { value: ethAmount },
-        `Sold ${amount} ETH for USDC`
+      const ethAmount = this._parseEther(amount);
+      const usdcBalance = await this.exchangeManager.getUSDCBalance();
+      if (usdcBalance === 0n) {
+        return formatErrorResponse("Contract has no USDC reserves", 400);
+      }
+
+      const receipt = await this.nonceManager.executeTransaction((options) =>
+        this.exchangeManager.sellETHForUSDC({ ...options, value: ethAmount })
       );
+
+      const usdcReceived = await this._calculateExpectedUSDC(ethAmount);
+      const data = {
+        transactionHash: receipt.hash,
+        usdcReceived: ethers.formatUnits(usdcReceived, this.decimals.USDC),
+      };
+
+      info("Successfully sold ETH for USDC", {
+        amount,
+        usdcReceived: data.usdcReceived,
+        txHash: receipt.hash,
+      });
+      return formatSuccessResponse(data, "Successfully sold ETH for USDC");
     } catch (err) {
-      throw this._enhanceError(err, "Failed to sell ETH for USDC");
+      error("Failed to sell ETH for USDC", { amount, error: err.message });
+      return formatErrorResponse(`Failed to sell ETH: ${err.message}`, 500);
     }
   }
 
   async exchangeUSDCForDAJU(amount) {
-    info(`Initiating exchangeUSDCForDAJU`, { amount });
     try {
-      this._validateAmount(amount, "USDC amount");
-      const amountBigInt = ethers.parseUnits(amount, this.decimals.USDC);
+      debug("Starting exchangeUSDCForDAJU", { amount });
 
-      await this._executeTx(
-        this.usdcContract,
-        "approve",
-        [this.exchangeManager.target, amountBigInt],
-        {},
-        `Approved ${amount} USDC for DAJU exchange`
+      // 1. Validate input and parse amount
+      if (!amount || isNaN(amount)) {
+        throw new Error("Invalid amount provided");
+      }
+      const usdcAmount = this._parseUnits(amount, this.decimals.USDC);
+
+      // 2. Get sender address and verify contracts
+      const senderAddress = await this.wallet.getAddress();
+      await this._verifyUSDCBalance(senderAddress, usdcAmount);
+      if (!this.usdcContract?.target || !this.exchangeManager?.target) {
+        throw new Error("Contracts not properly initialized");
+      }
+
+      // 3. Log important addresses for debugging
+      debug("Contract addresses", {
+        usdcContract: this.usdcContract.target,
+        exchangeManager: this.exchangeManager.target,
+        senderAddress,
+      });
+
+      // 4. Verify USDC balance
+      await this._verifyUSDCBalance(senderAddress, usdcAmount);
+
+      
+
+      // 5. Approve USDC spending (with additional checks)
+      const allowance = await this.usdcContract.allowance(
+        senderAddress,
+        this.exchangeManager.target
       );
 
-      return await this._executeTx(
-        this.exchangeManager,
-        "exchangeUSDCForDAJU",
-        [amountBigInt],
-        {},
-        `Exchanged ${amount} USDC for DAJU`
+      if (allowance < usdcAmount) {
+        debug("Approving USDC spending...", {
+          required: usdcAmount.toString(),
+          currentAllowance: allowance.toString(),
+        });
+
+        const approveTx = await this.nonceManager.executeTransaction(
+          (options) =>
+            this.usdcContract.approve(
+              this.exchangeManager.target,
+              usdcAmount,
+              options
+            )
+        );
+        await approveTx.wait();
+        debug("Approval successful", { txHash: approveTx.hash });
+      }
+
+      // 6. Execute the exchange
+      const receipt = await this.nonceManager.executeTransaction((options) =>
+        this.exchangeManager.exchangeUSDCForDAJU(usdcAmount, {
+          ...options,
+          gasLimit: 300000,
+        })
+      );
+
+      // 7. Verify the transaction
+      const txReceipt = await this.provider.getTransactionReceipt(receipt.hash);
+      if (txReceipt.status !== 1) {
+        throw new Error("Transaction failed");
+      }
+
+      // 8. Return success response
+      const data = {
+        transactionHash: receipt.hash,
+        usdcAmount: amount,
+        dajuAmount:
+          (usdcAmount * 10n ** 18n) /
+          ((await this.exchangeManager.usdcToDajuRate()) *
+            10n ** BigInt(this.decimals.USDC)),
+      };
+
+      info("Successfully exchanged USDC for DAJU", {
+        amount,
+        txHash: receipt.hash,
+        dajuAmount: data.dajuAmount.toString(),
+      });
+
+      return formatSuccessResponse(
+        data,
+        "Successfully exchanged USDC for DAJU"
       );
     } catch (err) {
-      throw this._enhanceError(err, "Failed to exchange USDC for DAJU");
+      error("Failed to exchange USDC for DAJU", {
+        amount,
+        error: err.message,
+        stack: err.stack,
+        contractAddresses: {
+          usdc: this.usdcContract?.target,
+          exchangeManager: this.exchangeManager?.target,
+        },
+      });
+      return formatErrorResponse(
+        `Failed to exchange USDC for DAJU: ${err.message}`,
+        500
+      );
     }
   }
 
   async exchangeDAJUForUSDC(amount) {
-    info(`Initiating exchangeDAJUForUSDC`, { amount });
     try {
-      this._validateAmount(amount, "DAJU amount");
-      const amountBigInt = ethers.parseUnits(amount, this.decimals.DAJU);
+      debug("Starting exchangeDAJUForUSDC", { amount });
+      const dajuAmount = this._parseUnits(amount, this.decimals.DAJU);
+      const senderAddress = await this.wallet.getAddress();
 
-      // Approve ExchangeManager to spend DAJU from wallet
-      await this._executeTx(
-        this.dajuToken,
-        "approve",
-        [this.exchangeManager.target, amountBigInt],
-        {},
-        `Approved ${amount} DAJU for USDC exchange`
+      const dajuBalance = await this.dajuToken.balanceOf(senderAddress);
+      if (dajuBalance < dajuAmount)
+        throw new Error("Insufficient DAJU balance");
+
+      await this.nonceManager.executeTransaction((options) =>
+        this.dajuToken.approve(
+          this.exchangeManager.address,
+          dajuAmount,
+          options
+        )
       );
 
-      return await this._executeTx(
-        this.exchangeManager,
-        "exchangeDAJUForUSDC",
-        [amountBigInt],
-        {},
-        `Exchanged ${amount} DAJU for USDC`
+      const receipt = await this.nonceManager.executeTransaction((options) =>
+        this.exchangeManager.exchangeDAJUForUSDC(dajuAmount, {
+          ...options,
+          gasLimit: 300000,
+        })
+      );
+
+      const data = { transactionHash: receipt.hash };
+      info("Successfully exchanged DAJU for USDC", {
+        amount,
+        txHash: receipt.hash,
+      });
+      return formatSuccessResponse(
+        data,
+        "Successfully exchanged DAJU for USDC"
       );
     } catch (err) {
-      throw this._enhanceError(err, "Failed to exchange DAJU for USDC");
+      error("Failed to exchange DAJU for USDC", { amount, error: err.message });
+      return formatErrorResponse(
+        `Failed to exchange DAJU for USDC: ${err.message}`,
+        500
+      );
     }
   }
 
   async calculateETHAmount(usdcAmount) {
-    info(`Calculating ETH amount`, { usdcAmount });
     try {
-      this._validateAmount(usdcAmount, "USDC amount");
-      const amountBigInt = ethers.parseUnits(usdcAmount, this.decimals.USDC);
-      const ethAmount = await this.exchangeManager.calculateETHAmount(amountBigInt);
-      const result = ethers.formatEther(ethAmount);
-      debug(`ETH amount calculated`, { result });
-      return result;
+      debug("Calculating ETH amount", { usdcAmount });
+      const parsedAmount = this._parseUnits(usdcAmount, this.decimals.USDC);
+      const ethAmount = await this._calculateExpectedETH(parsedAmount);
+      const data = { ethAmount: ethers.formatEther(ethAmount) };
+      info("ETH amount calculated", { usdcAmount, ethAmount: data.ethAmount });
+      return formatSuccessResponse(data, "ETH amount calculated successfully");
     } catch (err) {
-      throw this._enhanceError(err, "Failed to calculate ETH amount");
+      error("Failed to calculate ETH amount", {
+        usdcAmount,
+        error: err.message,
+      });
+      return formatErrorResponse(
+        `Failed to calculate ETH amount: ${err.message}`,
+        500
+      );
     }
   }
 
   async calculateUSDCAmount(ethAmount) {
-    info(`Calculating USDC amount`, { ethAmount });
     try {
-      this._validateAmount(ethAmount, "ETH amount");
-      const amountBigInt = ethers.parseEther(ethAmount);
-      const usdcAmount = await this.exchangeManager.calculateUSDCAmount(amountBigInt);
-      const result = ethers.formatUnits(usdcAmount, this.decimals.USDC);
-      debug(`USDC amount calculated`, { result });
-      return result;
+      debug("Calculating USDC amount", { ethAmount });
+      const parsedAmount = this._parseEther(ethAmount);
+      const usdcAmount = await this._calculateExpectedUSDC(parsedAmount);
+      const data = {
+        usdcAmount: ethers.formatUnits(usdcAmount, this.decimals.USDC),
+      };
+      info("USDC amount calculated", {
+        ethAmount,
+        usdcAmount: data.usdcAmount,
+      });
+      return formatSuccessResponse(data, "USDC amount calculated successfully");
     } catch (err) {
-      throw this._enhanceError(err, "Failed to calculate USDC amount");
+      error("Failed to calculate USDC amount", {
+        ethAmount,
+        error: err.message,
+      });
+      return formatErrorResponse(
+        `Failed to calculate USDC amount: ${err.message}`,
+        500
+      );
     }
+  }
+
+  // Private helper methods
+  _parseEther(amount) {
+    if (!amount || isNaN(amount)) throw new Error("Invalid ETH amount");
+    return ethers.parseEther(amount.toString());
+  }
+
+  _parseUnits(amount, decimals) {
+    if (!amount || isNaN(amount)) throw new Error(`Invalid amount`);
+    return ethers.parseUnits(amount.toString(), decimals);
+  }
+
+  async _verifyUSDCBalance(address, requiredAmount) {
+    const balance = await this.usdcContract.balanceOf(address);
+    debug("Verifying USDC balance", {
+      address,
+      required: ethers.formatUnits(requiredAmount, this.decimals.USDC),
+      actual: ethers.formatUnits(balance, this.decimals.USDC),
+    });
+    if (balance < requiredAmount) {
+      throw new Error(
+        `Insufficient USDC balance: ${ethers.formatUnits(
+          balance,
+          this.decimals.USDC
+        )} available`
+      );
+    }
+  }
+
+  async _verifyETHReserves(usdcAmount) {
+    const ethReserve = await this.exchangeManager.getETHBalance();
+    const requiredEth = await this._calculateExpectedETH(usdcAmount);
+    debug("Verifying ETH reserves", {
+      available: ethers.formatEther(ethReserve),
+      required: ethers.formatEther(requiredEth),
+    });
+    if (ethReserve < requiredEth) {
+      throw new Error(
+        `Insufficient ETH reserves: ${ethers.formatEther(ethReserve)} available`
+      );
+    }
+  }
+
+  async _calculateExpectedETH(usdcAmount) {
+    const rate = await this.exchangeManager.usdcToEthRate();
+    return (
+      (usdcAmount * 10n ** 18n) / (rate * 10n ** BigInt(this.decimals.USDC))
+    );
+  }
+
+  async _calculateExpectedUSDC(ethAmount) {
+    const rate = await this.exchangeManager.usdcToEthRate();
+    return (ethAmount * rate * 10n ** BigInt(this.decimals.USDC)) / 10n ** 18n;
+  }
+
+  async _getActualETHReceived(address, receipt) {
+    const balanceBefore = await this.provider.getBalance(
+      address,
+      receipt.blockNumber - 1
+    );
+    const balanceAfter = await this.provider.getBalance(
+      address,
+      receipt.blockNumber
+    );
+    return balanceAfter - balanceBefore;
   }
 }
 
-const controllerInstance = new TokenController();
+const tokenController = new TokenController();
 
 module.exports = {
-  getTokenInfo: controllerInstance.getTokenInfo.bind(controllerInstance),
-  buyETHWithUSDC: controllerInstance.buyETHWithUSDC.bind(controllerInstance),
-  sellETHForUSDC: controllerInstance.sellETHForUSDC.bind(controllerInstance),
-  exchangeUSDCForDAJU: controllerInstance.exchangeUSDCForDAJU.bind(controllerInstance),
-  exchangeDAJUForUSDC: controllerInstance.exchangeDAJUForUSDC.bind(controllerInstance),
-  calculateETHAmount: controllerInstance.calculateETHAmount.bind(controllerInstance),
-  calculateUSDCAmount: controllerInstance.calculateUSDCAmount.bind(controllerInstance),
+  buyETHWithUSDC: tokenController.buyETHWithUSDC.bind(tokenController),
+  sellETHForUSDC: tokenController.sellETHForUSDC.bind(tokenController),
+  exchangeUSDCForDAJU:
+    tokenController.exchangeUSDCForDAJU.bind(tokenController),
+  exchangeDAJUForUSDC:
+    tokenController.exchangeDAJUForUSDC.bind(tokenController),
+  calculateETHAmount: tokenController.calculateETHAmount.bind(tokenController),
+  calculateUSDCAmount:
+    tokenController.calculateUSDCAmount.bind(tokenController),
 };

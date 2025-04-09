@@ -1111,17 +1111,18 @@
       "contracts/ExchangeManager.sol:ExchangeManager": {
         "src": "contracts/ExchangeManager.sol:8",
         "version": {
-          "withMetadata": "bccfc2f1229bbb3c5c35f0c2f7312f9056cf7b7a5ff0ee3d9af4ecc06bd6bfda",
-          "withoutMetadata": "acaa74a6d7c83ac0eee7f6006f4082a2b706f35dc0f4528a4a9fb95ac911457d",
-          "linkedWithoutMetadata": "acaa74a6d7c83ac0eee7f6006f4082a2b706f35dc0f4528a4a9fb95ac911457d"
+          "withMetadata": "0b9c805521ffa2e72a27f94f32ee733555d7f97c1c773d9857c864af55496937",
+          "withoutMetadata": "fd69e1bc8b6a1213b6c6a9fcf8b26a2e4f2b6ed07af630db32744641b17a0b56",
+          "linkedWithoutMetadata": "fd69e1bc8b6a1213b6c6a9fcf8b26a2e4f2b6ed07af630db32744641b17a0b56"
         },
         "inherit": [
           "@openzeppelin/contracts/utils/ReentrancyGuard.sol:ReentrancyGuard"
         ],
         "libraries": [],
         "methods": [
-          "(address,address,uint256,uint256,address,uint256,uint256,uint8)",
+          "(address,address,uint256,uint256,address,uint256,uint256,uint8,uint256)",
           "depositUSDC(uint256)",
+          "depositDAJU(uint256)",
           "buyETHWithUSDC(uint256)",
           "sellETHForUSDC()",
           "buyETHWithSupportedToken(uint256)",
@@ -1130,6 +1131,16 @@
           "exchangeDAJUForUSDC(uint256)",
           "exchangeSupportedTokenForDAJU(uint256)",
           "exchangeDAJUForSupportedToken(uint256)",
+          "updateRates(uint256,uint256,uint256,uint256)",
+          "togglePause()",
+          "withdrawETH(uint256)",
+          "withdrawUSDC(uint256)",
+          "withdrawDAJU(uint256)",
+          "withdrawSupportedToken(uint256)",
+          "getUSDCBalance()",
+          "getETHBalance()",
+          "getSupportedTokenBalance()",
+          "getDajuBalance()",
           "()"
         ],
         "linkReferences": [],
@@ -1137,7 +1148,7 @@
           {
             "kind": "constructor",
             "contract": "ExchangeManager",
-            "src": "contracts/ExchangeManager.sol:51"
+            "src": "contracts/ExchangeManager.sol:73"
           }
         ],
         "layout": {
@@ -1215,8 +1226,16 @@
               "src": "contracts/ExchangeManager.sol:17"
             },
             {
-              "label": "paused",
+              "label": "owner",
               "offset": 1,
+              "slot": "8",
+              "type": "t_address",
+              "contract": "ExchangeManager",
+              "src": "contracts/ExchangeManager.sol:18"
+            },
+            {
+              "label": "paused",
+              "offset": 21,
               "slot": "8",
               "type": "t_bool",
               "contract": "ExchangeManager",
